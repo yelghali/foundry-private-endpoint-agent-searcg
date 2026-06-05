@@ -1,0 +1,43 @@
+# Local Terraform state and provider artifacts
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Variable files that may contain environment-specific values
+terraform.tfvars
+*.auto.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Plan output
+*.tfplan
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+# Local working artifacts (deployment logs, captured proof, state dumps)
+*.log
+*_tail.txt
+*_summary.txt
+state_list*.txt
+tf_outputs.json
+tfplan*
+PROOF.txt
+PROOF_in_vnet.txt
+
+# Ad-hoc jump-box test scripts (hardcoded to a specific deployment)
+agent/provision_test.sh
+agent/rerun_test.sh
+agent/introspect.sh
+agent/proof.sh
+agent/demo_query.sh
+agent/demo_query_verbose.sh
