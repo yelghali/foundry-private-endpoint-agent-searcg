@@ -214,6 +214,13 @@ Configuration is auto-read from `terraform output`; override any value with
 environment variables (`PROJECT_ENDPOINT`, `MODEL_DEPLOYMENT_NAME`,
 `AI_SEARCH_CONNECTION_NAME`, `AI_SEARCH_ENDPOINT`, `AI_SEARCH_INDEX_NAME`).
 
+> **Why the agent may not appear in the portal.** `create_agent.py`,
+> `query_agent.py`, and `jumpbox_query.sh` **delete the agent version after each
+> run** so they don't leave test agents behind — so nothing persists. To create
+> an agent that **stays** in the project (visible in the New Foundry portal under
+> **Agents**), run `python create_persistent_agent.py`. List what currently
+> exists with `python list_agents.py`.
+
 ### Test a query from the jump box (no SSH required)
 
 [`agent/jumpbox_query.sh`](agent/jumpbox_query.sh) is a **self-contained** test
@@ -456,10 +463,13 @@ terraform/
   outputs.tf       endpoints + names consumed by the agent scripts
   example.tfvars   sample variable values
 agent/
-  requirements.txt Python deps
-  config.py        reads config from env or `terraform output`
-  create_index.py  creates an AI Search index + sample docs
-  create_agent.py  creates/runs the agent using the Azure AI Search tool
-  query_agent.py   asks one question (CLI arg) and prints the grounded answer
-  jumpbox_query.sh self-contained jump-box test (via `az vm run-command`)
+  requirements.txt          Python deps (azure-ai-projects >= 2.0.0)
+  config.py                 reads config from env or `terraform output`
+  create_index.py           creates an AI Search index + sample docs
+  create_agent.py           creates a v2 prompt agent, runs one query, deletes it
+  create_persistent_agent.py  creates a v2 prompt agent and LEAVES it (shows in portal)
+  query_agent.py            asks one question (CLI arg) and prints the grounded answer
+  list_agents.py            lists the v2 agents currently in the project
+  jumpbox_query.sh          self-contained jump-box test (via `az vm run-command`)
+  list_agents.sh            jump-box helper that lists the project's v2 agents
 ```
