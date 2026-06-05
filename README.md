@@ -205,6 +205,68 @@ Configuration is auto-read from `terraform output`; override any value with
 environment variables (`PROJECT_ENDPOINT`, `MODEL_DEPLOYMENT_NAME`,
 `AI_SEARCH_CONNECTION_NAME`, `AI_SEARCH_ENDPOINT`, `AI_SEARCH_INDEX_NAME`).
 
+### Test a query from the jump box (no SSH required)
+
+[`agent/jumpbox_query.sh`](agent/jumpbox_query.sh) is a **self-contained** test
+script: it bootstraps a Python venv on the jump box, resolves the AI Search
+connection, creates a temporary agent, asks one question, prints the grounded
+answer (with its `【…†source】` citation), and deletes the agent. Auth uses the
+**VM's managed identity** — no `az login` on the box.
+
+The jump box identity needs `Foundry User` on the project and `Search Index Data
+Contributor` on the search service. Get the config values from
+`terraform output`.
+
+**Run the default sample question** (`az vm run-command` — runs the script on the
+VM and returns its output to you):
+
+```powershell
+$rg = "rg-foundry-pe"; $vm = "jumpbox"
+$proj   = terraform -chdir=terraform output -raw project_endpoint
+$search = terraform -chdir=terraform output -raw ai_search_connection_name
+
+az vm run-command invoke -g $rg -n $vm --command-id RunShellScript `
+  --scripts "@agent/jumpbox_query.sh" `
+  --parameters "PROJECT_ENDPOINT=$proj" "AI_SEARCH_CONNECTION_NAME=$search" `
+  --query "value[].message" -o tsv
+```
+
+**Ask your own question.** `az vm run-command` can't pass values with spaces, so
+send the question **base64-encoded** as `QUESTION_B64` (the script decodes it):
+
+```powershell
+$q = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("How long does express shipping take?"))
+
+az vm run-command invoke -g $rg -n $vm --command-id RunShellScript `
+  --scripts "@agent/jumpbox_query.sh" `
+  --parameters "PROJECT_ENDPOINT=$proj" "AI_SEARCH_CONNECTION_NAME=$search" "QUESTION_B64=$q" `
+  --query "value[].message" -o tsv
+```
+
+Expected output (DNS resolves to **192.168.x** private IPs, run completes, and
+the answer carries a citation):
+
+```text
+===== 1. PRIVATE DNS RESOLUTION (expect 192.168.x private IPs) =====
+   fdrype6990search.search.windows.net           -> 192.168.1.7
+   fdrype6990.services.ai.azure.com              -> 192.168.1.10
+===== 3. RUN THE QUERY =====
+Index      : agent-sample-index (via connection fdrype6990search)
+Question   : How long does express shipping take?
+Run status : completed
+
+Answer:
+Express shipping takes 1-2 business days【3:0†source】.
+```
+
+> **Interactive alternative.** If you have **Azure Bastion** or SSH into the box,
+> activate the venv and call the parameterized helper directly:
+> ```bash
+> export PROJECT_ENDPOINT="$(terraform -chdir=terraform output -raw project_endpoint)"
+> export AI_SEARCH_CONNECTION_NAME="$(terraform -chdir=terraform output -raw ai_search_connection_name)"
+> /opt/venv/bin/python agent/query_agent.py "How long does express shipping take?"
+> ```
+
 ### Example run — query, REST calls, and grounded response
 
 The following is a **real, captured run** of the agent from inside the VNet
@@ -384,4 +446,6 @@ agent/
   config.py        reads config from env or `terraform output`
   create_index.py  creates an AI Search index + sample docs
   create_agent.py  creates/runs the agent using the Azure AI Search tool
+  query_agent.py   asks one question (CLI arg) and prints the grounded answer
+  jumpbox_query.sh self-contained jump-box test (via `az vm run-command`)
 ```
