@@ -54,8 +54,7 @@ if [[ ! -x /opt/venv/bin/python ]]; then
 fi
 /opt/venv/bin/pip install --quiet \
   "azure-identity>=1.17.0" \
-  "azure-ai-projects>=1.0.0,<2.0.0" \
-  "azure-ai-agents>=1.0.0,<2.0.0"
+  "azure-ai-projects>=2.0.0"
 
 echo
 echo "===== 3. RUN THE QUERY ====="
@@ -63,41 +62,55 @@ echo "===== 3. RUN THE QUERY ====="
 import os
 from azure.identity import DefaultAzureCredential
 from azure.ai.projects import AIProjectClient
-from azure.ai.agents.models import AzureAISearchQueryType, AzureAISearchTool
+from azure.ai.projects.models import (
+    AISearchIndexResource,
+    AzureAISearchQueryType,
+    AzureAISearchTool,
+    AzureAISearchToolResource,
+    PromptAgentDefinition,
+)
 
 project = AIProjectClient(endpoint=os.environ["PROJECT_ENDPOINT"], credential=DefaultAzureCredential())
+openai = project.get_openai_client()
 conn = project.connections.get(name=os.environ["AI_SEARCH_CONNECTION_NAME"])
 
-tool = AzureAISearchTool(
-    index_connection_id=conn.id,
-    index_name=os.environ["AI_SEARCH_INDEX_NAME"],
-    query_type=AzureAISearchQueryType.SIMPLE,
-    top_k=3,
-)
-agent = project.agents.create_agent(
-    model=os.environ["MODEL_DEPLOYMENT_NAME"],
-    name="ai-search-agent-query",
-    instructions=("You are a helpful support assistant. Answer questions using ONLY the "
-                  "information returned by the Azure AI Search tool. If the answer is not "
-                  "in the search results, say you don't know."),
-    tools=tool.definitions,
-    tool_resources=tool.resources,
+# New Foundry (v2): create a prompt agent VERSION, then query via Responses API.
+agent = project.agents.create_version(
+    agent_name="ai-search-agent-v2",
+    definition=PromptAgentDefinition(
+        model=os.environ["MODEL_DEPLOYMENT_NAME"],
+        instructions=("You are a helpful support assistant. Answer questions using ONLY the "
+                      "information returned by the Azure AI Search tool. If the answer is not "
+                      "in the search results, say you don't know. Always cite your sources and "
+                      "render them as `[message_idx:search_idx\u2020source]`."),
+        tools=[
+            AzureAISearchTool(
+                azure_ai_search=AzureAISearchToolResource(
+                    indexes=[
+                        AISearchIndexResource(
+                            project_connection_id=conn.id,
+                            index_name=os.environ["AI_SEARCH_INDEX_NAME"],
+                            query_type=AzureAISearchQueryType.SIMPLE,
+                            top_k=3,
+                        ),
+                    ]
+                )
+            )
+        ],
+    ),
 )
 try:
-    th = project.agents.threads.create()
     q = os.environ["QUESTION"]
-    project.agents.messages.create(thread_id=th.id, role="user", content=q)
-    run = project.agents.runs.create_and_process(thread_id=th.id, agent_id=agent.id)
+    print(f"Agent      : {agent.name} (version {agent.version})")
     print(f"Index      : {os.environ['AI_SEARCH_INDEX_NAME']} (via connection {conn.name})")
     print(f"Question   : {q}")
-    print(f"Run status : {run.status}")
-    if run.status == "failed":
-        print(f"Run error  : {run.last_error}")
-    for m in project.agents.messages.list(thread_id=th.id):
-        if m.role == "assistant" and m.text_messages:
-            print("\nAnswer:")
-            print(m.text_messages[-1].text.value)
-            break
+    response = openai.responses.create(
+        input=q,
+        tool_choice="required",
+        extra_body={"agent_reference": {"name": agent.name, "type": "agent_reference"}},
+    )
+    print("\nAnswer:")
+    print(response.output_text)
 finally:
-    project.agents.delete_agent(agent.id)
+    project.agents.delete_version(agent_name=agent.name, agent_version=agent.version)
 PYEOF

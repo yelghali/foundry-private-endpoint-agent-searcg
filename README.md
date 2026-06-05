@@ -52,10 +52,15 @@ and the six private DNS zones, so the whole stack is self-contained.
 - **Account** and **project capability hosts** that enable the Standard Agent
   (vector store = AI Search, thread store = Cosmos DB, file store = Storage)
 
-**Agent** (`agent/`)
+**Agent** (`agent/`) — uses the **new Foundry (v2) Agent Service**
+(`azure-ai-projects >= 2.0.0`): a *prompt agent* created with
+`project.agents.create_version(...)` and queried through the OpenAI-compatible
+**Responses API** (`openai.responses.create`). This is the "New Foundry"
+experience (agents have a **name + version**), not the legacy Assistants API
+(`create_agent` / `asst_...` ids).
 - `create_index.py` — creates a small AI Search index with sample docs
-- `create_agent.py` — creates an agent that uses the **Azure AI Search tool**,
-  asks a question, prints the grounded answer
+- `create_agent.py` — creates a v2 prompt agent that uses the **Azure AI Search
+  tool**, asks a question, prints the grounded answer
 
 ---
 
@@ -195,11 +200,15 @@ uploads three sample support documents.
 python create_agent.py
 ```
 
-`create_agent.py`:
-1. Connects to the project (`project_endpoint`).
+`create_agent.py` (new Foundry v2):
+1. Connects to the project (`project_endpoint`) and gets the OpenAI client
+   (`project.get_openai_client()`).
 2. Resolves the **AI Search project connection** to its resource id.
-3. Builds an `AzureAISearchTool` over the index.
-4. Creates the agent, asks a question, and prints the grounded answer.
+3. Creates a **prompt agent version** with `project.agents.create_version(...)`,
+   attaching an `AzureAISearchTool` over the index.
+4. Queries it via the **Responses API**
+   (`openai.responses.create(..., extra_body={"agent_reference": ...})`), prints
+   the grounded answer, then deletes the agent version.
 
 Configuration is auto-read from `terraform output`; override any value with
 environment variables (`PROJECT_ENDPOINT`, `MODEL_DEPLOYMENT_NAME`,
@@ -209,9 +218,10 @@ environment variables (`PROJECT_ENDPOINT`, `MODEL_DEPLOYMENT_NAME`,
 
 [`agent/jumpbox_query.sh`](agent/jumpbox_query.sh) is a **self-contained** test
 script: it bootstraps a Python venv on the jump box, resolves the AI Search
-connection, creates a temporary agent, asks one question, prints the grounded
-answer (with its `【…†source】` citation), and deletes the agent. Auth uses the
-**VM's managed identity** — no `az login` on the box.
+connection, creates a temporary **new Foundry v2 agent version**
+(`create_version`), asks one question via the **Responses API**, prints the
+grounded answer (with its `【…†source】` citation), and deletes the agent version.
+Auth uses the **VM's managed identity** — no `az login` on the box.
 
 The jump box identity needs `Foundry User` on the project and `Search Index Data
 Contributor` on the search service. Get the config values from
@@ -251,9 +261,9 @@ the answer carries a citation):
    fdrype6990search.search.windows.net           -> 192.168.1.7
    fdrype6990.services.ai.azure.com              -> 192.168.1.10
 ===== 3. RUN THE QUERY =====
+Agent      : ai-search-agent-v2 (version 1)
 Index      : agent-sample-index (via connection fdrype6990search)
 Question   : How long does express shipping take?
-Run status : completed
 
 Answer:
 Express shipping takes 1-2 business days【3:0†source】.
@@ -283,26 +293,34 @@ What is your warranty, and what does it not cover?
 
 **The REST API calls the SDK makes** (all against the *private* Foundry data
 plane at `https://<account>.services.ai.azure.com`, reachable only inside the
-VNet). `Authorization: Bearer` headers are `REDACTED` by the SDK logger:
+VNet). This is the **new Foundry (v2)** flow: an agent *version* is created, then
+queried through the OpenAI-compatible **Responses API**. `Authorization: Bearer`
+headers are `REDACTED` by the SDK logger:
 
 ```http
-GET    https://fdrype6990.services.ai.azure.com/api/projects/project6990/connections/fdrype6990search?api-version=...
-POST   https://fdrype6990.services.ai.azure.com/api/projects/project6990/assistants?api-version=v1
-POST   https://fdrype6990.services.ai.azure.com/api/projects/project6990/threads?api-version=v1
-POST   https://fdrype6990.services.ai.azure.com/api/projects/project6990/threads/{thread_id}/messages?api-version=v1
-POST   https://fdrype6990.services.ai.azure.com/api/projects/project6990/threads/{thread_id}/runs?api-version=v1
-GET    https://fdrype6990.services.ai.azure.com/api/projects/project6990/threads/{thread_id}/runs/{run_id}/steps?api-version=v1
-DELETE https://fdrype6990.services.ai.azure.com/api/projects/project6990/assistants/{agent_id}?api-version=v1
+GET    http://169.254.169.254/metadata/identity/oauth2/token   (managed-identity token, IMDS)
+GET    https://fdrype6990.services.ai.azure.com/api/projects/project6990/connections/fdrype6990search
+POST   https://fdrype6990.services.ai.azure.com/api/projects/project6990/agents/ai-search-agent-v2/versions
+POST   https://fdrype6990.services.ai.azure.com/api/projects/project6990/openai/v1/responses
+DELETE https://fdrype6990.services.ai.azure.com/api/projects/project6990/agents/ai-search-agent-v2/versions/1
+
+OpenAI client base_url: https://fdrype6990.services.ai.azure.com/api/projects/project6990/openai/v1/
 
 Request headers (every call):
     Accept: application/json
-    User-Agent: AIProjectClient azsdk-python-ai-agents/1.1.0 Python/3.10.12 (Linux-x86_64)
+    User-Agent: azsdk-python-ai-projects/2.2.0 Python/3.10.12 (Linux-x86_64)
     Authorization: REDACTED
 Response status: 200
 ```
 
-**The AI Search tool call** (inside the run step) — note it reads the document
-straight from the **private** search endpoint
+> The `.../agents/{name}/versions` path (create) and `.../agents/{name}/versions/{n}`
+> (delete) are the **new Foundry v2** agent-version endpoints; the query itself
+> is a standard **Responses API** `POST .../openai/v1/responses` with an
+> `agent_reference` to the named agent. The legacy Assistants API
+> (`.../assistants`, `.../threads/...`) is **not** used.
+
+**The AI Search tool call** (emitted in the Responses API output) — note it reads
+the document straight from the **private** search endpoint
 `https://<search>.search.windows.net`:
 
 ```json
@@ -330,20 +348,16 @@ straight from the **private** search endpoint
 **The response**
 
 ```text
-Agent id    : asst_xxxxxxxxxxxxxxxxxxxxxxxx
+Agent       : ai-search-agent-v2  (version 1)
 Model       : gpt-4o
 Index       : agent-sample-index  (private, via connection fdrype6990search)
-RUN STATUS  : completed
 
 AGENT ANSWER:
-The warranty provided is a 1-year limited warranty that covers manufacturing
-defects. However, it does not cover accidental damage【3:0†source】.
-
-TOOL CALLS (proof the answer came from the AI Search index):
-  - tool: azure_ai_search
+The warranty includes a 1-year limited coverage for manufacturing defects but
+does not cover accidental damage【4:0†source】.
 ```
 
-The `【3:0†source】` citation and the `azure_ai_search` tool call confirm the
+The `【4:0†source】` citation and the `azure_ai_search` tool call confirm the
 answer was grounded on document `3` (*"Warranty"*) in the private index, not on
 the model's parametric knowledge. The underlying index document is *"All
 hardware products include a 1-year limited warranty that covers manufacturing

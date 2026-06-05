@@ -1,4 +1,4 @@
-azure-ai-projects>=1.0.0,<2.0.0
-azure-ai-agents>=1.0.0,<2.0.0
+# New Foundry (v2) Agent Service SDK: project.agents.create_version + Responses API.
+azure-ai-projects>=2.0.0
 azure-identity>=1.17.0
 azure-search-documents>=11.5.0
